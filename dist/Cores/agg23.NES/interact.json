@@ -142,7 +142,31 @@
           "adjust_small": 1,
           "adjust_large": 4
         }
-      }
+      },
+      {
+        "name": "Link Mode",
+        "id": 100,
+        "type": "list",
+        "enabled": true,
+        "persist": true,
+        "writeonly": true,
+        "address": "0x00001000",
+        "defaultval": 0,
+        "options": [
+          {
+            "value": 0,
+            "name": "Disabled"
+          },
+          {
+            "value": 3,
+            "name": "Player One"
+          },
+          {
+            "value": 1,
+            "name": "Player Two"
+          }
+        ]
+      },
     ],
     "messages": []
   }

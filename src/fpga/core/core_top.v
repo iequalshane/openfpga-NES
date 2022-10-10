@@ -248,16 +248,6 @@ module core_top (
   assign cart_tran_pin31         = 1'bz;  // input
   assign cart_tran_pin31_dir     = 1'b0;  // input
 
-  // link port is input only
-  assign port_tran_so            = 1'bz;
-  assign port_tran_so_dir        = 1'b0;  // SO is output only
-  assign port_tran_si            = 1'bz;
-  assign port_tran_si_dir        = 1'b0;  // SI is input only
-  assign port_tran_sck           = 1'bz;
-  assign port_tran_sck_dir       = 1'b0;  // clock direction can change
-  assign port_tran_sd            = 1'bz;
-  assign port_tran_sd_dir        = 1'b0;  // SD is input and not used
-
   // tie off the rest of the pins we are not using
   assign cram0_a                 = 'h0;
   assign cram0_dq                = {16{1'bZ}};
@@ -343,6 +333,10 @@ module core_top (
         end
         32'h00000308: begin
           lightgun_dpad_aim_speed <= bridge_wr_data[7:0];
+        end
+        32'h00001000: begin
+          linkmode_enabled = bridge_wr_data[0];
+          linkmode_p1 = bridge_wr_data[1];
         end
       endcase
     end
@@ -609,6 +603,9 @@ module core_top (
   wire lightgun_enabled_s;
   wire [7:0] lightgun_dpad_aim_speed_s;
   wire external_reset_s;
+  
+  reg linkmode_enabled;
+  reg linkmode_p1;
 
   synch_3 #(
       .WIDTH(18)
@@ -637,11 +634,14 @@ module core_top (
   );
 
   reg [31:0] reset_delay = 0;
+  
+  wire [15:0] p1_cont_key = (!linkmode_enabled || linkmode_p1) ? cont1_key_s : port_in;
+  wire [15:0] p2_cont_key = linkmode_enabled ? (linkmode_p1 ? port_in : cont1_key_s) : cont2_key_s;
 
   MAIN_NES nes (
       .clk_74a(clk_74a),
       .clk_ppu_21_47(clk_ppu_21_47),
-      .clk_85_9(clk_85_9),
+      .clk_85_9(clk_85_9), 
       .clock_locked(pll_core_locked),
 
       // Control
@@ -649,26 +649,26 @@ module core_top (
       .external_reset(external_reset_s),
 
       // Input
-      .p1_button_a(cont1_key_s[4]),
-      .p1_button_b(cont1_key_s[5]),
-      .p1_button_start(cont1_key_s[15]),
-      .p1_button_select(cont1_key_s[14]),
-      .p1_dpad_up(cont1_key_s[0]),
-      .p1_dpad_down(cont1_key_s[1]),
-      .p1_dpad_left(cont1_key_s[2]),
-      .p1_dpad_right(cont1_key_s[3]),
+      .p1_button_a(p1_cont_key[4]),
+      .p1_button_b(p1_cont_key[5]),
+      .p1_button_start(p1_cont_key[15]),
+      .p1_button_select(p1_cont_key[14]),
+      .p1_dpad_up(p1_cont_key[0]),
+      .p1_dpad_down(p1_cont_key[1]),
+      .p1_dpad_left(p1_cont_key[2]),
+      .p1_dpad_right(p1_cont_key[3]),
 
       .p1_lstick_x(cont1_joy_s[7:0]),
       .p1_lstick_y(cont1_joy_s[15:8]),
 
-      .p2_button_a(cont2_key_s[4]),
-      .p2_button_b(cont2_key_s[5]),
-      .p2_button_start(cont2_key_s[15]),
-      .p2_button_select(cont2_key_s[14]),
-      .p2_dpad_up(cont2_key_s[0]),
-      .p2_dpad_down(cont2_key_s[1]),
-      .p2_dpad_left(cont2_key_s[2]),
-      .p2_dpad_right(cont2_key_s[3]),
+      .p2_button_a(p2_cont_key[4]),
+      .p2_button_b(p2_cont_key[5]),
+      .p2_button_start(p2_cont_key[15]),
+      .p2_button_select(p2_cont_key[14]),
+      .p2_dpad_up(p2_cont_key[0]),
+      .p2_dpad_down(p2_cont_key[1]),
+      .p2_dpad_left(p2_cont_key[2]),
+      .p2_dpad_right(p2_cont_key[3]),
 
       .p3_button_a(cont3_key_s[4]),
       .p3_button_b(cont3_key_s[5]),
@@ -811,6 +811,59 @@ module core_top (
       .audio_lrck(audio_lrck),
       .audio_dac (audio_dac)
   );
+  
+  // Link SPI
+  
+  reg port_out;
+  reg [15:0] port_in;
+  reg [4:0] port_shift;
+  reg port_clock_out;
+  reg prev_port_clock;
+  reg [6:0] port_clock_delay;
+  reg prev_v_blank;
+  
+  assign port_tran_so            = port_out;
+  assign port_tran_so_dir        = 1;
+  assign port_tran_si            = 1'bz;
+  assign port_tran_si_dir        = 0;
+  assign port_tran_sck           = linkmode_p1 ? port_clock_out : 1'bz;
+  assign port_tran_sck_dir       = linkmode_p1;
+  assign port_tran_sd            = 1'bz;
+  assign port_tran_sd_dir        = 1'b0;
+  
+  always @(posedge clk_video_5_37) begin
+    if (linkmode_p1) begin
+      // Player One
+      if (port_shift <= 15) begin
+        port_clock_delay <= port_clock_delay + 1;
+        if (port_clock_delay == 0) begin
+          port_clock_out <= 1;
+          port_out <= cont1_key_s[port_shift];
+        end
+        if (port_clock_delay == 64) begin
+          port_clock_out <= 0;
+          port_in[port_shift] <= port_tran_si;
+          port_shift <= port_shift + 1;
+        end
+      end 
+      
+    end else begin
+      // Player Two
+      if (port_tran_sck == 1'b0)
+        prev_port_clock <= 1'b0;
+      if (port_tran_sck == 1'b1)
+        prev_port_clock <= 1'b1;
+        
+      if (prev_port_clock == 1'b0 && port_tran_sck == 1'b1) begin
+        port_in[port_shift] <= port_tran_si;
+        port_shift <= port_shift + 1;
+        port_out <= cont1_key_s[port_shift];
+      end
+    end
+    
+    prev_v_blank <= v_blank;
+    if (~prev_v_blank && v_blank) port_shift <= 0;
+  end
 
   ///////////////////////////////////////////////
 
